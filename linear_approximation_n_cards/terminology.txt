@@ -26,28 +26,45 @@ best_response_builder returns a new Strategy object that exploits the opponent's
 loop.py then does the mixing of strategies, as described in https://proceedings.mlr.press/v37/heinrich15.pdf ("Fictitious Self-Play in Extensive-Form Games")
 What I did on last go was naively literally mix probabilities together. This works if the game is over in a short number of moves, which is theoretically ok (?) if one card each, but clearly doesn't work for more cards.
 Silver etc. use supervised learning to learn a distilled version of the mixed strategies. I will try to avoid this at first by maintaining ALL best_responses and sampling appropriately.
+NOTE: further discussions with o3 + me thinking about it made me decide that we can skip the supervised learning bit by just storing all previous strategies. Horribly memory-inefficient but who cares because that's not the limiting factor.
 
+loop.py probably will call on some internal method within the StrategyAllStorage class to add another weight vector and update probability vector.
 
 
 
 
 
 "game_state": Full information about the game, including history and BOTH players' cards. Efficient representation.
-    -- "k": Number of cards each player starts with, k
-    -- "n": Number of cards in one suit. To start with, just one suit.
-    -- "player_one_cards": [list of n cards]
-    -- "player_two_cards": [list of n cards]
+    -- "k": Number of cards each player starts with.
+    -- "n": Number of cards in one suit. Four suits in total.
+    -- "player_one_cards": [list of k cards]
+    -- "player_two_cards": [list of k cards]
     -- "history": [moves made so far]
 
 "game_state_readable": As above but formatted as a nice string to be printed out
 
 "player_state": Information about the game as it appears to one player. IMPORTANT: Typically sent to a strategy to get next move, but the strategy does not explicitly check that it is their turn, just assumes this.
-    -- "num_starting_cards": Number of cards each player starts with, k
+    -- "k": Number of cards each player starts with, k
+    -- "n": Number of cards in one suit. Four suits in total.
     -- "player_order": 0 or 1, going first or second
     -- "player_cards": [list of n cards]
     -- "history": [moves made so far]
 
 "move": Integer, format described below.
+
+
+class Strategy(ABC):
+    def next_move(self, player_state):
+        Decide the next move based on the player's state. Must be implemented by subclasses.
+
+class StrategyAllStorage(Strategy):
+    def __init__(self, some_attribute):
+        This is where we'll store all past weight vectors from the best responses.
+
+    def next_move(self, player_state):
+        Essentially use probability vector to pick from weight vectors and eventually returns integer, representing move.
+        CRUCIALLY: we assume next_move always returns a legal move.
+
 "Strategy": Class
     "next_move()": Takes in player_state and returns integer, move
     "weights": Probably stores linear weights somewhere.
@@ -55,18 +72,20 @@ Silver etc. use supervised learning to learn a distilled version of the mixed st
 
 
 CARD FORMAT:
-There are n cards in a suit, labelled 0, 1, ..., n-1. For now, just one suit.
+There are n cards in a suit, labelled 0, 1, ..., n-1. For now, we ignore flushes, etc, but there are four suits.
 
 MOVE FORMAT (for now!) - we just use integers:
 Card High -- 0, 1, ..., n-1
 Card Pair -- n, n+1, ..., 2n-1
-Two Pair -- 2n, 2n+1, ..., 3n
+Trips -- 2n, 2n+1, ..., 3n-1
+Call -- 3n
+
 
 HISTORY FORMAT:
 List of increasing integers, as described in move format.
 
 Helper functions to make:
-    -- make game_state_readable
-    -- convert from card numbers to actual cards
-    -- history format converter
+    -- make game_state_readable (DONE)
+    -- convert from card numbers to actual cards (DONE)
+    -- history format converter (DONE)
 
