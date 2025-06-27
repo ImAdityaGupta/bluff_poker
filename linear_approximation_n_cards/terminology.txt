@@ -28,7 +28,7 @@ What I did on last go was naively literally mix probabilities together. This wor
 Silver etc. use supervised learning to learn a distilled version of the mixed strategies. I will try to avoid this at first by maintaining ALL best_responses and sampling appropriately.
 NOTE: further discussions with o3 + me thinking about it made me decide that we can skip the supervised learning bit by just storing all previous strategies. Horribly memory-inefficient but who cares because that's not the limiting factor.
 
-loop.py probably will call on some internal method within the StrategyAllStorage class to add another weight vector and update probability vector.
+loop.py probably will call on some internal method within the StrategyAllStorage class to add another weight vector and update probability vector. (right now doing manually outside class)
 
 
 
@@ -57,17 +57,78 @@ class Strategy(ABC):
     def next_move(self, player_state):
         Decide the next move based on the player's state. Must be implemented by subclasses.
 
-class StrategyAllStorage(Strategy):
+class StrategyAllStorage_MC(Strategy):
     def __init__(self, some_attribute):
-        This is where we'll store all past weight vectors from the best responses.
+        There's two things happening here. First, we've made decision (in scope of the BestResponse-Mixing loop) to store all previous weights and sample from them via prob_vector.
+        Second, for this particular strategy, we are going to do most simple thing of MC, i.e. REINFORCE algorithm
+        (See https://davidstarsilver.wordpress.com/wp-content/uploads/2025/04/lecture-7-policy-gradient-methods.pdf, page 21)
+
+        FEATURES - specific to k=2, and only card high, card pair, trips (as below in CARD FORMAT / MOVE FORMAT).
+
+        Note all features are 0 or 1.
+        First 6n+2 bits encode move history: 3n+1 for which moves we made, 3n+1 for which they made.
+        Next 0 <= i < n bits encode whether we have at least one card labelled i.
+        Next 1 bit encodes whether we have a pair.
+        Penultimate bit encodes who went first: 0 for us, 1 for them.
+        Final bit is a built-in bias term, always 1. (Not sure if this is strictly necessary but oh well).
+        In total, 7n+5 bits.
+
+        THETA/WEIGHT Matrix
+
+        This is a list of 3n+1 x 7n+5 matrices. For a specific matrix, each row corresponds to weights for a particular action.
+        Note we generically have 3n+1 options, but must play legal moves. Initially, all zeros (uniform choice).
+        We use softmax, making sure to only include legal moves in our normalisation / choice by masking later.
+        We determine actually probabilities by multiplying weight matrix with feature state, which through softmax gives probabilities.
+
+        self.prob_vector: contains probs of which weight vectors to pick from. I.e., in the long run looks like (1%,1%,1%,...1%) or something
+        ROW DIMENSION OF WEIGHT MATRICES: self.M = 3n + 1
+        COLUMN DIMENSION OF WEIGHT MATRICES: self.D = 7n + 5
 
     def next_move(self, player_state):
-        Essentially use probability vector to pick from weight vectors and eventually returns integer, representing move.
+        Uses self.prob_vector to pick from weight matrices and eventually returns integer, representing move.
+        Calls on self.sample_action once determines which matrix to use.
         CRUCIALLY: we assume next_move always returns a legal move.
+
+    def new_weight_matrix(self):
+        Initializes a fresh M x D weight matrix with zeros. Used only when initially creating StrategyAllStorage_MC object.
+
+    def player_state_to_feature(self, history, player_cards, who_first):
+        Encodes game state to features vector of length D = 7n+5. Note doesn't actually take in a PlayerState object,
+        but rather the components of one; this is done to facilitate feeding in partial histories.
+
+    def legal_mask(self, history):
+        Boolean vector of length M; True for legal moves. Used in self.sample_action.
+
+    def sample_action(self, history, player_cards, who_first, which_weights=None):
+        Sample an action based on current_weights (by default, else which_weights) and softmax.
+        Returns (action, probs, mask, features). Probably don't need to return mask.
+
+    def reinforce_update(self, trajectories, reward, alpha):
+        Apply REINFORCE update to current_weights.
+        trajectories: list of tuples (history, player_cards, who_first, action, features, probs)
+        reward: scalar terminal reward, +- 1.
+        alpha: learning rate
+
+
 
 "Strategy": Class
     "next_move()": Takes in player_state and returns integer, move
     "weights": Probably stores linear weights somewhere.
+
+def sampler(n, k, strat1, strat2, random_dist=True, forced_player_one=None, forced_player_two=None, check_legal=False, debug=False):
+    Actually plays through a game with strat1 against strat2, assuming strat1 goes first.
+    By default randomly deal cards, but allow particular hands to be given.
+    By default don't check if moves returned by strategies are legal, assume they're ok.
+    By default don't print out states, can do if e.g. HumanDebugStrategy used.
+
+    returns history, [player_one_cards, player_two_cards], winner (0 or 1, strat1 or strat2)
+
+
+
+def eval_strats(n, k, strat1, strat2):
+    Efficiently cycle through all possible starting hands and evaluate how strat1 does against strat2.
+    Do once for each side starting. Takes into account blocker effects (? I think, this function was GPT, and haven't checked yet)
+
 
 
 

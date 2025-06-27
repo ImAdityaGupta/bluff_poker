@@ -1,5 +1,10 @@
 from abc import ABC, abstractmethod
 import random
+import numpy as np
+import pandas as pd
+import itertools
+import math
+from collections import Counter
 
 class Strategy(ABC):
     def __init__(self, n, k):
@@ -10,23 +15,126 @@ class Strategy(ABC):
     def next_move(self, player_state):
         pass
 
-class StrategyAllStorage(Strategy):
+
+class StrategyAllStorage_MC(Strategy):
+    """
+    Monte Carlo strategy with softmax policy parameterized by a weight matrix.
+
+    Attributes:
+      n: int, number of distinct card labels
+      k: int, hand size
+      M: int, number of actions = 3*n + 1
+      D: int, feature dimension = 8*n + 4 (includes bias)
+      weight_matrices: list of np.ndarray, each shape (M, D)
+      current_weights: np.ndarray, shape (M, D)
+      prob_vector: placeholder
+    """
     def __init__(self, n, k):
         super().__init__(n, k)
-        self.prob_vector = []
-        self.weights_vector = []
-        self.initialize_weights()
-        self.initialize_probs()
-
-    def initialize_weights(self):
-        pass
-
-    def initialize_probs(self):
-        pass
+        self.M = 3 * n + 1
+        self.D = 7 * n + 5
+        self.prob_vector = np.array([1.0])
+        self.weight_matrices = []
+        self.current_weights = None
+        self.new_weight_matrix()
 
     def next_move(self, player_state):
-        # Example placeholder logic
-        return "some move"
+        history = player_state.history
+        player_cards = player_state.player_cards
+        who_first = player_state.player_order
+        which_matrix = self.weight_matrices[np.random.choice(len(self.weight_matrices), p=self.prob_vector)]
+
+
+        action, _, _, _ =  self.sample_action(history, player_cards, who_first, which_weights=which_matrix)
+        return action
+
+    def new_weight_matrix(self):
+        """
+        Initialize a fresh M x D weight matrix with zeros.
+        """
+        W = np.zeros((self.M, self.D), dtype=float)
+        self.weight_matrices.append(W)
+        self.current_weights = W
+
+    def player_state_to_feature(self, history, player_cards, who_first):
+        """
+        Encode game state to features vector of length D = 7*n + 5.
+        """
+        features = np.zeros(self.D, dtype=float)
+        # 1) our and their past moves
+        even = history[0::2]
+        odd  = history[1::2]
+        our_moves   = even if who_first == 0 else odd
+        their_moves = odd  if who_first == 0 else even
+        for m in our_moves:
+            features[m] = 1.0
+        for m in their_moves:
+            features[m + (3*self.n + 1)] = 1.0
+        # 2) hand counts
+        offset = 6*self.n + 2
+        counts = np.zeros(self.n, int)
+        for c in player_cards:
+            counts[c % self.n] += 1
+        for i in range(self.n):
+            if counts[i] >= 1:
+                features[offset + i] = 1.0
+            if counts[i] >= 2:
+                features[offset + self.n] = 1.0
+        # 3) who went first
+        features[7*self.n + 3] = float(who_first)
+        # 4) bias constant
+        features[7*self.n + 4] = 1.0
+        return features
+
+    def legal_mask(self, history):
+        """
+        Boolean mask length M: True for legal moves.
+        """
+        mask = np.zeros(self.M, dtype=bool)
+        if not history:
+            mask[:self.M-1] = True  # disallow final pass
+        else:
+            last = history[-1]
+            if last + 1 < self.M:
+                mask[last+1:] = True
+        return mask
+
+    def sample_action(self, history, player_cards, who_first, which_weights=None):
+        """
+        Sample an action based on current_weights (by default) and softmax.
+        Returns (action, probs, mask, features)
+        """
+
+        if which_weights is None:
+            which_weights = self.current_weights
+
+        features = self.player_state_to_feature(history, player_cards, who_first)
+        logits = which_weights.dot(features)
+        mask = self.legal_mask(history)
+        # mask illegal
+        logits = np.where(mask, logits, -np.inf)
+        logits -= np.max(logits[mask])
+        exp_logits = np.exp(logits) * mask
+        probs = exp_logits / np.sum(exp_logits)
+        action = np.random.choice(self.M, p=probs)
+        return action, probs, mask, features
+
+    def reinforce_update(self, trajectories, reward, alpha):
+        """
+        Apply REINFORCE update to current_weights.
+        trajectories: list of tuples (history, player_cards, who_first, action, features, probs)
+        reward: scalar terminal reward
+        alpha: learning rate
+        """
+        for history, player_cards, who_first, action, features, probs in trajectories:
+            # gradient w.r.t. logits: grad = one_hot(action) - probs
+            grad_logits = -probs.copy()
+            grad_logits[action] += 1.0
+            # update weight rows: for each action a: W[a] += alpha * reward * grad_logits[a] * features
+            # vectorized as outer product
+            grad_W = np.outer(grad_logits, features)
+            self.current_weights += alpha * reward * grad_W
+
 
 class RandomStrategy(Strategy):
     def __init__(self, n, k):
@@ -104,7 +212,6 @@ def move_to_string(n, move):
     if move < 3*n:
         return f"{move%n}T"
     return "Call"
-
 
 def string_to_move(n, move_string):
     bonus = 0
@@ -232,6 +339,7 @@ class PlayerState():
         self.n = n
         self.k = k
         self.player_cards = []
+        # player_order is 0 if Player goes first, 1 if Player goes second
         self.player_order = None
         self.history = []
 
@@ -257,7 +365,10 @@ class PlayerState():
 
         return to_return
 
-def sampler(n, k, strat1, strat2, check_legal=False):
+
+
+
+def sampler(n, k, strat1, strat2, random_dist=True, forced_player_one=None, forced_player_two=None, check_legal=False, debug=False):
     '''
     We always assume strat1 goes first.
     returns history, [player_one_cards, player_two_cards], winner (0 or 1, strat1 or strat2)
@@ -268,6 +379,11 @@ def sampler(n, k, strat1, strat2, check_legal=False):
 
     player_one_state.player_cards = game_state.player_one_cards
     player_two_state.player_cards = game_state.player_two_cards
+    if not random_dist:
+        player_one_state.player_cards = forced_player_one
+        player_two_state.player_cards = forced_player_two
+        game_state.player_one_cards = forced_player_one
+        game_state.player_two_cards = forced_player_two
 
     player_one_state.player_order = 0
     player_two_state.player_order = 1
@@ -286,7 +402,8 @@ def sampler(n, k, strat1, strat2, check_legal=False):
 
             if game_state.is_over():
                 winner = game_state.game_winner()
-                print(game_state.game_state_readable(winner))
+                if debug:
+                    print(game_state.game_state_readable(winner))
                 return game_state.history, [game_state.player_one_cards, game_state.player_two_cards], winner
 
         elif current_player == 1:
@@ -301,15 +418,107 @@ def sampler(n, k, strat1, strat2, check_legal=False):
 
             if game_state.is_over():
                 winner = game_state.game_winner()
-                print(game_state.game_state_readable(winner))
+                if debug:
+                    print(game_state.game_state_readable(winner))
                 return game_state.history, [game_state.player_one_cards, game_state.player_two_cards], winner
 
         current_player = 1 - current_player
         # print(game_state.history)
 
-strat1 = TellTruthSimpleStrategy(3, 2)
-strat2 = HumanDebugInputStrategy(3, 2)
 
 
-print(sampler(3, 2, strat1, strat2))
+
+def eval_strats(n, k, strat1, strat2):
+    """
+    Evaluate strat1 vs strat2 by iterating over rank‐only deals,
+    weighting each by the number of underlying suit‐assignments.
+    Returns weighted wins1, wins2, total_weighted_games, win_rate1.
+    """
+    M = 4  # suits per rank
+    wins1 = wins2 = 0.0
+    total_weighted_games = 0.0
+
+    for i in range(1):
+
+        # all ways to choose k cards *by rank* for player1 (multisets)
+        for p1_ranks in itertools.combinations_with_replacement(range(n), k):
+            c1 = Counter(p1_ranks)
+            # how many suit‐assignments yield exactly these rank counts?
+            ways1 = 1
+            for r, cnt in c1.items():
+                ways1 *= math.comb(M, cnt)
+
+            # now enumerate p2 rank‐multisets from the remaining suit‐counts
+            for p2_ranks in itertools.combinations_with_replacement(range(n), k):
+                c2 = Counter(p2_ranks)
+                # skip any that overuse a rank’s suits
+                valid = True
+                ways2 = 1
+                for r, cnt2 in c2.items():
+                    cnt1 = c1.get(r, 0)
+                    if cnt1 + cnt2 > M:
+                        valid = False
+                        break
+                    ways2 *= math.comb(M - cnt1, cnt2)
+                if not valid:
+                    continue
+
+                # total number of underlying deals for this (p1_ranks,p2_ranks)
+                weight = ways1 * ways2
+
+                # --- game 1: strat1 first
+                _, _, winner = sampler(
+                    n, k, strat1, strat2,
+                    random_dist=False,
+                    forced_player_one=list(p1_ranks),
+                    forced_player_two=list(p2_ranks),
+                    check_legal=True
+                )
+                if winner == 0:
+                    wins1 += weight
+                else:
+                    wins2 += weight
+                total_weighted_games += weight
+
+                # --- game 2: strat2 first, swap hands
+                _, _, win_sw = sampler(
+                    n, k, strat2, strat1,
+                    random_dist=False,
+                    forced_player_one=list(p2_ranks),
+                    forced_player_two=list(p1_ranks),
+                    check_legal=True
+                )
+                # winner_swapped == 0 => strat2; ==1 => strat1
+                if win_sw == 1:
+                    wins1 += weight
+                else:
+                    wins2 += weight
+                total_weighted_games += weight
+
+    win_rate1 = wins1 / total_weighted_games
+    return wins1, wins2, total_weighted_games, win_rate1
+
+def copy_array_to_clipboard(arr: np.ndarray, sep: str = "\t", fmt: str = "{:.8e}", ):
+        """
+        Copy a 2D numpy array to the system clipboard as sep-delimited text.
+        No index or header is included.
+        """
+        if arr.ndim != 2:
+            raise ValueError("Only 2D arrays supported")
+        pd.DataFrame(arr).to_clipboard(sep=sep, index=False, header=False)
+        print("✓ Array copied to clipboard. Now just Ctrl+V into Excel.")
+        for row in arr:
+            print(sep.join(fmt.format(x) for x in row))
+
+if __name__ == "__main__":
+
+
+    temp_n = 3
+    temp_k = 2
+
+    strat1 = TellTruthSimpleStrategy(temp_n, temp_k)
+    strat2 = RandomStrategy(temp_n, temp_k)
+
+
+    print(eval_strats(temp_n, temp_k, strat1, strat2))
 
