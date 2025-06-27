@@ -5,6 +5,7 @@ import pandas as pd
 import itertools
 import math
 from collections import Counter
+np.set_printoptions(suppress=True, precision=6)
 
 class Strategy(ABC):
     def __init__(self, n, k):
@@ -38,14 +39,21 @@ class StrategyAllStorage_MC(Strategy):
         self.current_weights = None
         self.new_weight_matrix()
 
+        self.which_matrix_index = None
+
     def next_move(self, player_state):
         history = player_state.history
         player_cards = player_state.player_cards
         who_first = player_state.player_order
-        which_matrix = self.weight_matrices[np.random.choice(len(self.weight_matrices), p=self.prob_vector)]
+
+        if len(history) == 0 or len(history) == 1:
+            self.which_matrix_index = np.random.choice(len(self.weight_matrices), p=self.prob_vector)
+
+        which_matrix = self.weight_matrices[self.which_matrix_index]
 
 
-        action, _, _, _ =  self.sample_action(history, player_cards, who_first, which_weights=which_matrix)
+        action, probs, _, _ =  self.sample_action(history, player_cards, who_first, which_weights=which_matrix)
+        print(probs)
         return action
 
     def new_weight_matrix(self):
@@ -130,10 +138,67 @@ class StrategyAllStorage_MC(Strategy):
             # gradient w.r.t. logits: grad = one_hot(action) - probs
             grad_logits = -probs.copy()
             grad_logits[action] += 1.0
+
+            # grad_logits += 0.01 * (-np.log(probs + 1e-8) - 1)
             # update weight rows: for each action a: W[a] += alpha * reward * grad_logits[a] * features
             # vectorized as outer product
             grad_W = np.outer(grad_logits, features)
             self.current_weights += alpha * reward * grad_W
+
+    def merge_weights(self, other_strat, eta):
+        self.weight_matrices += other_strat.weight_matrices
+        self.prob_vector = np.concatenate((self.prob_vector*(1-eta), other_strat.prob_vector*eta))
+        self.current_weights = self.weight_matrices[-1]
+
+
+def save_all_storage_mc_strategy_npz(filepath, n, k, prob_vector, weight_matrices):
+    """
+    Save strategy state to a .npz archive.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to write (e.g. "my_strat.npz").
+    n : int
+        Number of labels.
+    k : int
+        Hand size.
+    prob_vector : 1D np.ndarray
+        Current probability vector.
+    weight_matrices : list of np.ndarray
+        Your history of (M × D) matrices.
+    """
+    savez_kwargs = {
+        'n': np.array(n, dtype=int),
+        'k': np.array(k, dtype=int),
+        'prob_vector': prob_vector,
+    }
+    for idx, W in enumerate(weight_matrices):
+        savez_kwargs[f'W{idx}'] = W
+    np.savez(filepath, **savez_kwargs)
+
+
+def load_all_storage_mc_strategy_npz(filepath):
+    """
+    Load strategy state from a .npz archive saved by save_strategy_npz.
+    Returns StrategyAllStorage_MC object
+    """
+    data = np.load(filepath)
+    n = int(data['n'])
+    k = int(data['k'])
+    obj = StrategyAllStorage_MC(n, k)
+    obj.prob_vector = data['prob_vector']
+
+
+    # Collect W0, W1, ... in ascending order
+    weight_keys = sorted(
+        [key for key in data.keys() if key.startswith('W')],
+        key=lambda s: int(s[1:])  # extract the index from 'W{idx}'
+    )
+    obj.weight_matrices = [data[key] for key in weight_keys]
+    obj.current_weights = obj.weight_matrices[-1] if obj.weight_matrices else None
+
+    return obj
 
 
 class RandomStrategy(Strategy):
@@ -195,34 +260,6 @@ class HumanDebugInputStrategy(Strategy):
         # if last_move == -1:
         #     return random.randint(last_move+1, call_move-1)
         # return random.randint(last_move+1, call_move)
-
-
-
-def call_index(n, k):
-    return 3*n
-
-def card_to_string(n, card):
-    return str(card%n)
-
-def move_to_string(n, move):
-    if move < n:
-        return f"{move%n}H"
-    if move < 2*n:
-        return f"{move%n}P"
-    if move < 3*n:
-        return f"{move%n}T"
-    return "Call"
-
-def string_to_move(n, move_string):
-    bonus = 0
-    if move_string == "Call":
-        return 3*n
-    if move_string[-1] == 'T':
-        bonus = 2*n
-    elif move_string[-1] == 'P':
-        bonus = n
-
-    return bonus + int(move_string[:-1])
 
 class GameState():
     def __init__(self, n, k):
@@ -366,6 +403,34 @@ class PlayerState():
         return to_return
 
 
+def call_index(n, k):
+    return 3*n
+
+def card_to_string(n, card):
+    return str(card%n)
+
+def move_to_string(n, move):
+    if move < n:
+        return f"{move%n}H"
+    if move < 2*n:
+        return f"{move%n}P"
+    if move < 3*n:
+        return f"{move%n}T"
+    return "Call"
+
+def string_to_move(n, move_string):
+    bonus = 0
+    if move_string == "Call":
+        return 3*n
+    if move_string[-1] == 'T':
+        bonus = 2*n
+    elif move_string[-1] == 'P':
+        bonus = n
+
+    return bonus + int(move_string[:-1])
+
+
+
 
 
 def sampler(n, k, strat1, strat2, random_dist=True, forced_player_one=None, forced_player_two=None, check_legal=False, debug=False):
@@ -426,9 +491,7 @@ def sampler(n, k, strat1, strat2, random_dist=True, forced_player_one=None, forc
         # print(game_state.history)
 
 
-
-
-def eval_strats(n, k, strat1, strat2):
+def eval_strats(n, k, strat1, strat2, repeats=3):
     """
     Evaluate strat1 vs strat2 by iterating over rank‐only deals,
     weighting each by the number of underlying suit‐assignments.
@@ -438,7 +501,7 @@ def eval_strats(n, k, strat1, strat2):
     wins1 = wins2 = 0.0
     total_weighted_games = 0.0
 
-    for i in range(1):
+    for i in range(repeats):
 
         # all ways to choose k cards *by rank* for player1 (multisets)
         for p1_ranks in itertools.combinations_with_replacement(range(n), k):
@@ -516,9 +579,13 @@ if __name__ == "__main__":
     temp_n = 3
     temp_k = 2
 
-    strat1 = TellTruthSimpleStrategy(temp_n, temp_k)
+    strat1 = StrategyAllStorage_MC(temp_n, temp_k)
     strat2 = RandomStrategy(temp_n, temp_k)
 
 
+    # while True:
+    #     print(sampler(temp_n, temp_k, strat1, strat2, debug=True))
+
     print(eval_strats(temp_n, temp_k, strat1, strat2))
+    print(eval_strats(temp_n, temp_k, strat2, strat1))
 
