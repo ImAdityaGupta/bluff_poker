@@ -1,0 +1,5 @@
+We are talking about iter_99 opp_strat.pkl, so not technically using last iteration.
+Best n=3, k=2 version so far.
+Exploitability ~ 0.52 via current feature-set (7n+5, our moves, their moves, our cards, pair?, who_first?, bias)
+Acutally got exploitability of 0.53 by getting rid of our moves features (lol)
+

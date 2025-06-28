@@ -109,6 +109,7 @@ def strat_from_weights(exp_num, iter_num, run_num):
 
 if __name__ == "__main__":
     loaded_strat = strat_from_weights(0,24,-1)
+    print(loaded_strat.prob_vector)
     while True:
         print(sampler(3, 2, loaded_strat, HumanDebugInputStrategy(3,2), debug=True))
 

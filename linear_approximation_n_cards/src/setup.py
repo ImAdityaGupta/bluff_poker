@@ -24,8 +24,8 @@ class StrategyAllStorage_MC(Strategy):
     Attributes:
       n: int, number of distinct card labels
       k: int, hand size
-      M: int, number of actions = 3*n + 1
-      D: int, feature dimension = 8*n + 4 (includes bias)
+      M: int, number of actions = 3n + 1
+      D: int, feature dimension = 7n+5 (includes bias)
       weight_matrices: list of np.ndarray, each shape (M, D)
       current_weights: np.ndarray, shape (M, D)
       prob_vector: placeholder
@@ -53,7 +53,7 @@ class StrategyAllStorage_MC(Strategy):
 
 
         action, probs, _, _ =  self.sample_action(history, player_cards, who_first, which_weights=which_matrix)
-        print(probs)
+        # print(probs)
         return action
 
     def new_weight_matrix(self):
@@ -419,13 +419,17 @@ def move_to_string(n, move):
     return "Call"
 
 def string_to_move(n, move_string):
-    bonus = 0
+
     if move_string == "Call":
         return 3*n
     if move_string[-1] == 'T':
         bonus = 2*n
     elif move_string[-1] == 'P':
         bonus = n
+    elif move_string[-1] == 'H':
+        bonus = 0
+    else:
+        raise ValueError("weird parsing")
 
     return bonus + int(move_string[:-1])
 

@@ -5,6 +5,7 @@ import math
 import pandas as pd
 from setup import StrategyAllStorage_MC, RandomStrategy, HumanDebugInputStrategy, TellTruthSimpleStrategy, sampler, eval_strats, copy_array_to_clipboard
 from copy import deepcopy
+from logging_weights import strat_from_weights
 
 def get_alpha(alpha_control, episode, episode_len):
     # return 0.1
@@ -83,7 +84,7 @@ def best_response_builder(opp_strat, env_facts, training_params, logging_params)
             alpha = get_alpha(alpha_control, episode, episode_len)
             br_strategy.reinforce_update(trajectories, reward, alpha)
 
-        test_result = eval_strats(n, k, br_strategy, opp_strat, repeats=10)
+        test_result = eval_strats(n, k, br_strategy, opp_strat, repeats=20)
         this_run_test_snapshots.append((episode_len, test_result[3]))
         this_run_weights_snapshots.append(copy.deepcopy(br_strategy.weight_matrices))
         this_run_prob_vector_snapshots.append(copy.deepcopy(br_strategy.prob_vector))
@@ -99,6 +100,13 @@ def best_response_builder(opp_strat, env_facts, training_params, logging_params)
 
     return best_br_strategy, (test_snapshots, weights_snapshots, prob_vector_snapshots)
 
+
+
+
+
+
+
+
 if __name__ == "__main__":
 
     temp_n = 3
@@ -106,8 +114,8 @@ if __name__ == "__main__":
 
     env_facts = {"n": temp_n, "k": temp_k}
     training_params = {
-        "num_runs": 3,
-        "episode_len": 6_000,
+        "num_runs": 10,
+        "episode_len": 60_000,
         "method": None,
         "epsilon_control": None,
         "alpha_control": None,
@@ -115,13 +123,9 @@ if __name__ == "__main__":
     logging_params = {"test_snapshot_interval": 1000, "brain_snapshot_interval": 1000, "exp_num": 0}
 
 
-    current_strat = StrategyAllStorage_MC(temp_n, temp_k)
-    # copy_array_to_clipboard(current_strat.current_weights)
-    print("")
+    current_strat = strat_from_weights(1, 99, -1)
 
     max_exploiter, (test_snapshots_, brain_snapshots_, prob_vector_snapshots_) = best_response_builder(current_strat, env_facts, training_params, logging_params)
-    for i in test_snapshots_:
-        print(i)
 
 
 

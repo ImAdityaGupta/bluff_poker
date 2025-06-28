@@ -1,10 +1,10 @@
 from setup import StrategyAllStorage_MC, RandomStrategy, HumanDebugInputStrategy, TellTruthSimpleStrategy, sampler, eval_strats, copy_array_to_clipboard
 from setup import save_all_storage_mc_strategy_npz, load_all_storage_mc_strategy_npz
 from best_response import best_response_builder, get_alpha
-from logging import one_iter_logging
+from logging_weights import one_iter_logging
 
 def get_eta(eta_control, iter, num_iters):
-    return 1/(2+iter)
+    return min(0.5, 4/(1+iter))
 
 
 def experiment(env_facts, num_iters, eta_control, rl_training_params, rl_logging_params, initial_strat=None, logging=True):
@@ -49,21 +49,21 @@ def experiment(env_facts, num_iters, eta_control, rl_training_params, rl_logging
 
 if __name__ == "__main__":
 
-    temp_n = 3
+    temp_n = 10
     temp_k = 2
 
     env_facts = {"n": temp_n, "k": temp_k}
     training_params = {
-        "num_runs": 3,
-        "episode_len": 40_000,
+        "num_runs": 1,
+        "episode_len": 10_000,
         "method": None,
         "epsilon_control": None,
         "alpha_control": None,
     }
-    logging_params = {"test_snapshot_interval": 1000, "brain_snapshot_interval": 1000, "exp_num": 0}
+    logging_params = {"test_snapshot_interval": 1000, "brain_snapshot_interval": 1000, "exp_num": 2}
 
 
-    final_strat = experiment(env_facts, 25, None, training_params, logging_params, logging=True)
+    final_strat = experiment(env_facts, 10, None, training_params, logging_params, logging=True)
 
     # save_all_storage_mc_strategy_npz("my_strat.npz", final_strat.n, final_strat.k, final_strat.prob_vector, final_strat.weight_matrices)
     #
